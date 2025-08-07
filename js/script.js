@@ -2722,10 +2722,471 @@ function showGrammarDetails(type, element) {
         }
     }
 
+    // 单词朗读功能
+    function speakWord(word, element) {
+        if (!('speechSynthesis' in window)) {
+            alert('抱歉，您的浏览器不支持语音功能');
+            return;
+        }
+
+        // 停止当前播放
+        speechSynthesis.cancel();
+
+        // 视觉反馈
+        element.classList.add('speaking');
+
+        // 创建语音合成实例
+        const utterance = new SpeechSynthesisUtterance(word);
+        utterance.lang = 'en-US';
+        utterance.rate = 0.8;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+
+        // 尝试使用英语语音
+        const voices = speechSynthesis.getVoices();
+        const englishVoice = voices.find(voice =>
+            voice.lang.startsWith('en') &&
+            (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.name.includes('Alex'))
+        );
+
+        if (englishVoice) {
+            utterance.voice = englishVoice;
+        }
+
+        // 语音结束后移除视觉反馈
+        utterance.onend = () => {
+            element.classList.remove('speaking');
+        };
+
+        utterance.onerror = () => {
+            element.classList.remove('speaking');
+            console.error('语音播放失败');
+        };
+
+        // 开始播放
+        setTimeout(() => {
+            speechSynthesis.speak(utterance);
+        }, 100);
+    }
+
+    // 单词查询功能
+    async function queryWord(word) {
+        // 显示加载状态
+        showWordPopup(word, '正在查询...', '', '');
+
+        try {
+            // 首先尝试获取音标和英文释义
+            const dictResponse = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+            let phonetic = '';
+            let englishDefinition = '';
+            let example = '';
+
+            if (dictResponse.ok) {
+                const dictData = await dictResponse.json();
+                const entry = dictData[0];
+
+                // 提取音标
+                phonetic = entry.phonetics?.find(p => p.text)?.text || '';
+
+                // 提取英文释义和例句
+                const meanings = entry.meanings || [];
+                if (meanings.length > 0) {
+                    const firstMeaning = meanings[0];
+                    const definition = firstMeaning.definitions?.[0];
+
+                    if (definition) {
+                        englishDefinition = definition.definition;
+                        example = definition.example || '';
+                    }
+                }
+            }
+
+            // 尝试获取中文翻译
+            let chineseTranslation = '';
+
+            // 首先尝试本地词典（更可靠）
+            const localData = getLocalTranslation(word);
+            if (localData) {
+                chineseTranslation = localData.translation;
+                if (!phonetic) phonetic = localData.phonetic;
+                if (!example) example = localData.example;
+            } else {
+                // 如果本地词典没有，尝试在线翻译
+                try {
+                    // 使用MyMemory翻译API（免费且无需API key）
+                    const translateResponse = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=en|zh`);
+                    if (translateResponse.ok) {
+                        const translateData = await translateResponse.json();
+                        if (translateData.responseData && translateData.responseData.translatedText) {
+                            chineseTranslation = translateData.responseData.translatedText;
+                        }
+                    }
+                } catch (translateError) {
+                    console.log('在线翻译API不可用');
+                }
+            }
+
+            // 如果仍然没有中文翻译，显示提示
+            if (!chineseTranslation && englishDefinition) {
+                chineseTranslation = '暂无中文翻译';
+            }
+
+            // 组合最终的翻译结果
+            let finalTranslation = '';
+            if (chineseTranslation) {
+                finalTranslation = chineseTranslation;
+                if (englishDefinition) {
+                    finalTranslation += `\n\n英文释义: ${englishDefinition}`;
+                }
+            } else if (englishDefinition) {
+                finalTranslation = englishDefinition;
+            } else {
+                finalTranslation = '暂无释义';
+            }
+
+            showWordPopup(word, phonetic, finalTranslation, example);
+
+        } catch (error) {
+            console.error('查询失败:', error);
+            // 网络错误时使用本地词典
+            useLocalDictionary(word);
+        }
+    }
+
+    // 获取本地翻译
+    function getLocalTranslation(word) {
+        const localDict = {
+            'hello': { phonetic: '/həˈloʊ/', translation: '你好，问候语', example: 'Hello, how are you? 你好，你好吗？' },
+            'world': { phonetic: '/wɜːrld/', translation: '世界', example: 'Welcome to the world. 欢迎来到这个世界。' },
+            'study': { phonetic: '/ˈstʌdi/', translation: '学习，研究', example: 'I study English every day. 我每天学习英语。' },
+            'english': { phonetic: '/ˈɪŋɡlɪʃ/', translation: '英语', example: 'I love learning English. 我喜欢学习英语。' },
+            'learn': { phonetic: '/lɜːrn/', translation: '学习，学会', example: 'We learn something new every day. 我们每天都学到新东西。' },
+            'language': { phonetic: '/ˈlæŋɡwɪdʒ/', translation: '语言', example: 'English is a global language. 英语是一门全球性语言。' },
+            'grammar': { phonetic: '/ˈɡræmər/', translation: '语法', example: 'Grammar is important for learning. 语法对学习很重要。' },
+            'vocabulary': { phonetic: '/voʊˈkæbjəleri/', translation: '词汇', example: 'Building vocabulary takes time. 积累词汇需要时间。' },
+            'practice': { phonetic: '/ˈpræktɪs/', translation: '练习', example: 'Practice makes perfect. 熟能生巧。' },
+            'perfect': { phonetic: '/ˈpɜːrfɪkt/', translation: '完美的', example: 'Nobody is perfect. 没有人是完美的。' },
+            'time': { phonetic: '/taɪm/', translation: '时间', example: 'Time flies when you are having fun. 快乐时光总是过得很快。' },
+            'present': { phonetic: '/ˈpreznt/', translation: '现在的，礼物', example: 'I live in the present moment. 我活在当下。' },
+            'past': { phonetic: '/pæst/', translation: '过去的', example: 'The past cannot be changed. 过去无法改变。' },
+            'future': { phonetic: '/ˈfjuːtʃər/', translation: '将来的', example: 'The future is bright. 未来是光明的。' },
+            'simple': { phonetic: '/ˈsɪmpl/', translation: '简单的', example: 'Keep it simple. 保持简单。' },
+            'continuous': { phonetic: '/kənˈtɪnjuəs/', translation: '连续的', example: 'Continuous learning is important. 持续学习很重要。' },
+            'complete': { phonetic: '/kəmˈpliːt/', translation: '完成的', example: 'The project is complete. 项目完成了。' },
+            'verb': { phonetic: '/vɜːrb/', translation: '动词', example: 'Run is a verb. Run是一个动词。' },
+            'noun': { phonetic: '/naʊn/', translation: '名词', example: 'Cat is a noun. Cat是一个名词。' },
+            'adjective': { phonetic: '/ˈædʒɪktɪv/', translation: '形容词', example: 'Beautiful is an adjective. Beautiful是一个形容词。' },
+            'reading': { phonetic: '/ˈriːdɪŋ/', translation: '阅读', example: 'Reading is a good habit. 阅读是一个好习惯。' },
+            'writing': { phonetic: '/ˈraɪtɪŋ/', translation: '写作', example: 'Writing helps improve language skills. 写作有助于提高语言技能。' },
+            'speaking': { phonetic: '/ˈspiːkɪŋ/', translation: '说话，口语', example: 'Speaking practice is essential. 口语练习是必要的。' },
+            'listening': { phonetic: '/ˈlɪsənɪŋ/', translation: '听力', example: 'Listening to music helps relaxation. 听音乐有助于放松。' },
+            'book': { phonetic: '/bʊk/', translation: '书', example: 'Have you read this book? 你读过这本书吗？' },
+            'look': { phonetic: '/lʊk/', translation: '看', example: 'Look at the beautiful sunset. 看那美丽的日落。' },
+            'interpret': { phonetic: '/ɪnˈtɜːrprɪt/', translation: '解释，理解', example: 'How do you interpret this poem? 你如何理解这首诗？' },
+            'letters': { phonetic: '/ˈletərz/', translation: '字母，信件', example: 'The alphabet has 26 letters. 字母表有26个字母。' },
+            'other': { phonetic: '/ˈʌðər/', translation: '其他的', example: 'Do you have any other questions? 你还有其他问题吗？' },
+            'information': { phonetic: '/ˌɪnfərˈmeɪʃn/', translation: '信息', example: 'This information is very useful. 这个信息很有用。' },
+            'written': { phonetic: '/ˈrɪtn/', translation: '书面的，写的', example: 'This is a written exam. 这是一场笔试。' },
+            'have': { phonetic: '/hæv/', translation: '有', example: 'I have a dream. 我有一个梦想。' },
+            'you': { phonetic: '/juː/', translation: '你', example: 'How are you? 你好吗？' },
+            'read': { phonetic: '/riːd/', translation: '读', example: 'I read books every day. 我每天读书。' },
+            'this': { phonetic: '/ðɪs/', translation: '这个', example: 'This is my book. 这是我的书。' },
+            'know': { phonetic: '/noʊ/', translation: '知道', example: 'I know the answer. 我知道答案。' },
+            'right': { phonetic: '/raɪt/', translation: '正确的，右边', example: 'You are right. 你是对的。' },
+            'good': { phonetic: '/ɡʊd/', translation: '好的', example: 'This is a good book. 这是一本好书。' },
+            'make': { phonetic: '/meɪk/', translation: '制作，使', example: 'Make yourself at home. 请随便一点。' },
+            'work': { phonetic: '/wɜːrk/', translation: '工作', example: 'I work in an office. 我在办公室工作。' },
+            'life': { phonetic: '/laɪf/', translation: '生活，生命', example: 'Life is beautiful. 生活是美好的。' },
+            'way': { phonetic: '/weɪ/', translation: '方法，道路', example: 'This is the right way. 这是正确的方法。' },
+            'day': { phonetic: '/deɪ/', translation: '天，日子', example: 'Have a nice day! 祝你今天愉快！' },
+            'get': { phonetic: '/ɡet/', translation: '得到，获得', example: 'I want to get better. 我想变得更好。' },
+            'use': { phonetic: '/juːz/', translation: '使用', example: 'How do you use this? 你怎么使用这个？' },
+            'man': { phonetic: '/mæn/', translation: '男人', example: 'He is a good man. 他是个好人。' },
+            'new': { phonetic: '/nuː/', translation: '新的', example: 'I bought a new car. 我买了一辆新车。' },
+            'now': { phonetic: '/naʊ/', translation: '现在', example: 'I am busy now. 我现在很忙。' },
+            'old': { phonetic: '/oʊld/', translation: '老的，旧的', example: 'This is an old house. 这是一座老房子。' },
+            'see': { phonetic: '/siː/', translation: '看见', example: 'I can see you. 我能看见你。' },
+            'him': { phonetic: '/hɪm/', translation: '他（宾格）', example: 'I know him well. 我很了解他。' },
+            'two': { phonetic: '/tuː/', translation: '二', example: 'I have two cats. 我有两只猫。' },
+            'how': { phonetic: '/haʊ/', translation: '如何，怎样', example: 'How are you doing? 你过得怎么样？' },
+            'its': { phonetic: '/ɪts/', translation: '它的', example: 'The dog wagged its tail. 狗摇着它的尾巴。' },
+            'who': { phonetic: '/huː/', translation: '谁', example: 'Who is that person? 那个人是谁？' },
+            'oil': { phonetic: '/ɔɪl/', translation: '油', example: 'Olive oil is healthy. 橄榄油很健康。' },
+            'sit': { phonetic: '/sɪt/', translation: '坐', example: 'Please sit down. 请坐下。' },
+            'set': { phonetic: '/set/', translation: '设置，放置', example: 'Set the table for dinner. 摆桌子吃晚饭。' },
+            'run': { phonetic: '/rʌn/', translation: '跑', example: 'I like to run in the morning. 我喜欢早上跑步。' },
+            'eat': { phonetic: '/iːt/', translation: '吃', example: 'Let\'s eat dinner together. 我们一起吃晚饭吧。' },
+            'far': { phonetic: '/fɑːr/', translation: '远的', example: 'The school is not far from here. 学校离这里不远。' },
+            'sea': { phonetic: '/siː/', translation: '海', example: 'I love the blue sea. 我喜欢蓝色的大海。' },
+            'eye': { phonetic: '/aɪ/', translation: '眼睛', example: 'She has beautiful eyes. 她有美丽的眼睛。' },
+            'car': { phonetic: '/kɑːr/', translation: '汽车', example: 'My car is red. 我的车是红色的。' },
+            'dog': { phonetic: '/dɔːɡ/', translation: '狗', example: 'The dog is very friendly. 这只狗很友好。' },
+            'cat': { phonetic: '/kæt/', translation: '猫', example: 'The cat is sleeping. 猫在睡觉。' }
+        };
+
+        return localDict[word.toLowerCase()] || null;
+    }
+
+    // 本地词典备用函数
+    function useLocalDictionary(word) {
+        const wordData = getLocalTranslation(word);
+        if (wordData) {
+            showWordPopup(word, wordData.phonetic, wordData.translation, wordData.example);
+        } else {
+            showWordPopup(word, '', '暂无释义，建议查询在线词典', '点击"详细查询"按钮查看更多信息');
+        }
+    }
+
+    // 显示单词弹窗
+    function showWordPopup(word, phonetic, translation, example) {
+        // 移除已存在的弹窗
+        const existingPopup = document.querySelector('.word-popup-overlay');
+        if (existingPopup) {
+            existingPopup.remove();
+        }
+
+        // 创建弹窗覆盖层
+        const overlay = document.createElement('div');
+        overlay.className = 'word-popup-overlay';
+
+        // 创建弹窗
+        const popup = document.createElement('div');
+        popup.className = 'word-popup';
+
+        // 处理翻译文本格式
+        let formattedTranslation = '';
+        if (translation) {
+            // 如果包含英文释义，分别显示
+            if (translation.includes('\n\n英文释义:')) {
+                const parts = translation.split('\n\n英文释义:');
+                formattedTranslation = `
+                    <div class="word-translation chinese">${parts[0]}</div>
+                    <div class="word-translation english">英文释义: ${parts[1]}</div>
+                `;
+            } else {
+                formattedTranslation = `<div class="word-translation">${translation}</div>`;
+            }
+        }
+
+        popup.innerHTML = `
+            <div class="word-popup-header">
+                <h3 class="word-popup-title">${word}</h3>
+                <button class="word-popup-close">&times;</button>
+            </div>
+            <div class="word-popup-content">
+                ${phonetic ? `<div class="word-phonetic">${phonetic}</div>` : ''}
+                ${formattedTranslation}
+                ${example ? `<div class="word-example">例句: ${example}</div>` : ''}
+            </div>
+            <div class="word-popup-actions">
+                <button class="word-action-btn speak-btn">🔊 朗读</button>
+                <button class="word-action-btn translate-btn">🔍 详细查询</button>
+            </div>
+        `;
+
+        // 添加事件监听器
+        const closeBtn = popup.querySelector('.word-popup-close');
+        const speakBtn = popup.querySelector('.speak-btn');
+        const translateBtn = popup.querySelector('.translate-btn');
+
+        closeBtn.addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
+
+        speakBtn.addEventListener('click', () => {
+            speakWord(word, speakBtn);
+        });
+
+        translateBtn.addEventListener('click', () => {
+            // 打开在线词典
+            window.open(`https://dict.youdao.com/search?q=${word}`, '_blank');
+        });
+
+        // 添加到页面
+        overlay.appendChild(popup);
+        document.body.appendChild(overlay);
+    }
+
+    // 自动识别并处理英文单词
+    function makeWordsClickable() {
+        // 选择包含英文内容的元素
+        const containers = document.querySelectorAll('.structure, .example, .tense-cell, .component-definition, .method-description');
+
+        containers.forEach(container => {
+            if (container.classList.contains('processed')) return; // 避免重复处理
+
+            // 递归处理文本节点
+            function processTextNodes(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = node.textContent;
+                    // 匹配英文单词（3个字母以上，排除常见介词）
+                    const wordRegex = /\b[a-zA-Z]{3,}\b/g;
+
+                    if (wordRegex.test(text)) {
+                        const newHTML = text.replace(wordRegex, (match) => {
+                            // 排除常见的功能词
+                            const excludeWords = ['the', 'and', 'but', 'for', 'are', 'was', 'were', 'has', 'had', 'can', 'may', 'will', 'would', 'could', 'should', 'must', 'shall', 'might', 'this', 'that', 'these', 'those', 'with', 'from', 'they', 'them', 'their', 'there', 'where', 'when', 'what', 'who', 'how', 'why', 'not', 'all', 'any', 'some', 'one', 'two', 'three'];
+
+                            if (excludeWords.includes(match.toLowerCase())) {
+                                return match;
+                            }
+
+                            return `<span class="clickable-word" data-word="${match.toLowerCase()}">${match}</span>`;
+                        });
+
+                        // 创建新的HTML元素来替换文本节点
+                        const wrapper = document.createElement('span');
+                        wrapper.innerHTML = newHTML;
+                        node.parentNode.replaceChild(wrapper, node);
+                    }
+                } else if (node.nodeType === Node.ELEMENT_NODE && !node.classList.contains('clickable-word')) {
+                    // 递归处理子节点
+                    Array.from(node.childNodes).forEach(processTextNodes);
+                }
+            }
+
+            processTextNodes(container);
+            container.classList.add('processed');
+        });
+
+        // 为新创建的可点击单词添加事件监听器
+        document.querySelectorAll('.clickable-word').forEach(wordElement => {
+            if (wordElement.hasAttribute('data-listener')) return; // 避免重复添加
+
+            wordElement.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const word = this.getAttribute('data-word');
+
+                // 双击查询，单击朗读
+                if (this.clickCount === 1) {
+                    // 单击朗读
+                    speakWord(word, this);
+                } else {
+                    // 双击查询
+                    queryWord(word);
+                }
+            });
+
+            // 处理双击
+            wordElement.addEventListener('dblclick', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const word = this.getAttribute('data-word');
+                queryWord(word);
+            });
+
+            // 右键查询
+            wordElement.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+                const word = this.getAttribute('data-word');
+                queryWord(word);
+            });
+
+            wordElement.setAttribute('data-listener', 'true');
+        });
+    }
+
+    // 初始化单词点击功能
+    function initializeWordClick() {
+        // 页面加载完成后处理单词
+        makeWordsClickable();
+
+        // 添加使用提示
+        setTimeout(() => {
+            if (document.querySelectorAll('.clickable-word').length > 0) {
+                showWordFeatureTip();
+            }
+        }, 2000);
+
+        // 监听DOM变化，处理动态添加的内容
+        const observer = new MutationObserver(function(mutations) {
+            let shouldProcess = false;
+
+            mutations.forEach(function(mutation) {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    shouldProcess = true;
+                }
+            });
+
+            if (shouldProcess) {
+                setTimeout(makeWordsClickable, 100); // 延迟处理，确保DOM更新完成
+            }
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    // 显示功能提示
+    function showWordFeatureTip() {
+        // 检查是否已经显示过提示
+        if (localStorage.getItem('wordFeatureTipShown')) {
+            return;
+        }
+
+        const tip = document.createElement('div');
+        tip.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            z-index: 10000;
+            max-width: 300px;
+            font-size: 14px;
+            line-height: 1.4;
+            animation: slideInRight 0.5s ease-out;
+        `;
+
+        tip.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div>
+                    <strong>💡 新功能提示</strong><br>
+                    点击蓝色单词可朗读<br>
+                    双击或右键可查询释义
+                </div>
+                <button onclick="this.parentElement.parentElement.remove(); localStorage.setItem('wordFeatureTipShown', 'true');"
+                        style="background: none; border: none; color: white; font-size: 18px; cursor: pointer; margin-left: 10px;">&times;</button>
+            </div>
+        `;
+
+        // 添加动画样式
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideInRight {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+        `;
+        document.head.appendChild(style);
+
+        document.body.appendChild(tip);
+
+        // 5秒后自动消失
+        setTimeout(() => {
+            if (tip.parentNode) {
+                tip.remove();
+                localStorage.setItem('wordFeatureTipShown', 'true');
+            }
+        }, 5000);
+    }
+
     // 为播放按钮添加事件监听器
     document.addEventListener('DOMContentLoaded', function() {
         // 初始化语音功能
         initializeSpeech();
+
+        // 初始化单词点击功能
+        initializeWordClick();
 
         // 为所有播放按钮添加点击事件
         document.addEventListener('click', function(e) {
